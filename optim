@@ -1,0 +1,122 @@
+using JuMP, DataFrames, CSV, Dates, Query
+import Ipopt
+import Statistics
+
+data = CSV.read("C:/Users/tom_j/share-price-history.csv", DataFrame)
+
+getmonth(x) = String(split(x)[1])
+getday(x) = parse(Int8, replace(String(split(x)[2]), "." => ""))
+getyear(x) = parse(Int32, String(split(x)[3]))
+
+data.month = getmonth.(data.Date)
+data.day = getday.(data.Date)
+data.year = getyear.(data.Date)
+
+data.monthyear = hcat.(data.month, data.year)
+
+data = DataFrame([g[findmax(g.day)[2], :] for g in groupby(data, :monthyear)])
+
+reverse!(data[!, :"G Fund"])
+reverse!(data[!, :"F Fund"])
+reverse!(data[!, :"C Fund"])
+reverse!(data[!, :"S Fund"])
+reverse!(data[!, :"I Fund"])
+
+stocks = hcat.(data[!, :"G Fund"], data[!, :"F Fund"],
+    data[!, :"C Fund"], data[!, :"S Fund"], data[!, :"I Fund"])
+
+funds = ["G Fund", "F Fund", "C Fund", "S Fund", "I Fund"]
+
+stocks = reduce(vcat, stocks)
+
+stock_returns = Array{Float64}(undef, length(stocks[:, 1]) - 1, 5)
+
+for i in 1:length(stocks[:, 1])-1
+    stock_returns[i, :] =
+        (stocks[i+1, :] .- stocks[i, :]) ./ stocks[i, :]
+end
+stock_returns
+
+splits = []
+for start in 1:133
+
+    r = Statistics.mean(stock_returns[start:start+11, :]; dims=1)
+
+    Q = Statistics.cov(stock_returns[start:start+11, :])
+
+    portfolio = Model(Ipopt.Optimizer)
+    set_silent(portfolio)
+    @variable(portfolio, x[1:5] >= 0)
+    @objective(portfolio, Min, x' * Q * x)
+    @constraint(portfolio, sum(x) <= 1000)
+    @constraint(portfolio, sum(r[i] * x[i] for i in 1:5) >= 100)
+    optimize!(portfolio)
+
+    objective_value(portfolio)
+    push!(splits, hcat(value.(x)))
+end
+
+split_mat = reduce(hcat, splits)' ./ 1000
+
+performances = stock_returns[12:144, :]
+
+initial = 1000
+sp = []
+for i in 1:133
+    initial = sum((initial .* split_mat[i, :]) .* (1 .+ performances[i, :]))
+    push!(sp, initial)
+end
+
+initial = 1000
+c_ret = []
+for i in 1:133
+    initial = initial .* (1 .+ performances[i, 3])
+    push!(c_ret, initial)
+end
+
+initial = 1000
+g_ret = []
+for i in 1:133
+    initial = initial .* (1 .+ performances[i, 1])
+    push!(g_ret, initial)
+end
+initial = 1000
+f_ret = []
+for i in 1:133
+    initial = initial .* (1 .+ performances[i, 2])
+    push!(f_ret, initial)
+end
+initial = 1000
+s_ret = []
+for i in 1:133
+    initial = initial .* (1 .+ performances[i, 4])
+    push!(s_ret, initial)
+end
+initial = 1000
+i_ret = []
+for i in 1:133
+    initial = initial .* (1 .+ performances[i, 5])
+    push!(i_ret, initial)
+end
+
+
+
+using Plots
+plot(sp, label = "Markowitz", legend = :topleft)
+plot!(c_ret, label="C")
+plot!(g_ret, label="G")
+plot!(f_ret, label="F")
+plot!(s_ret, label="S")
+plot!(i_ret, label="I")
+
+sp_ret = []
+for i in 1:length(sp)-1
+       push!(sp_ret, (sp[i+1] .- sp[i]) ./ sp[i])
+end
+
+plot(sp_ret, title = "Monthly Markowitz Returns")
+
+using Statistics
+
+100 *((1 + mean(sp_ret[40:80]))^12 - 1)
+
